@@ -1,0 +1,784 @@
+[Output too large (39KB). Full output saved to: /User/caches/copilot-terminal-output/copilot-terminal-output-d13667c9-bd3f-43e5-95b3-6ab71bfcf473.txt]
+[Use readFile or grep to examine the full output.]
+
+    <a href="#" class="nav-link">Intake Information</a>
+    <a href="#" class="nav-link">Reports</a>
+    <a href="#" class="nav-link nav-link-active">Coordinator QA Snapshot</a>
+    <span class="nav-spacer"></span>
+    <a href="#" class="nav-link">My account</a>
+    <a href="#" class="nav-link">Log out</a>
+  </nav>
+
+  <main class="page-shell">
+    <section class="breadcrumbs">Reports / Coordinator QA Snapshot</section>
+
+    <section class="hero">
+      <h1>Coordinator QA Snapshot</h1>
+      <div class="data-source-bar">
+        <label for="csvUpload">Upload a CSV</label>
+        <input id="csvUpload" type="file" accept=".csv,text/csv" />
+        <button id="useDemoData" type="button">Use demo data</button>
+        <span id="dataSourceLabel">Using bundled demo CSV</span>
+      </div>
+      <p>F
+
+[... middle of output truncated ...]
+
+ statusSelect = document.getElementById("statusSelect");
+const csvPath = "https://raw.githubusercontent.com/NicholasHWagner/SIRS-QA-Dashboard/337b1f8ab7d8517aa96af1f2c422572899d90cf5/QualityAssurance.csv";
+const state = {
+  rows: [],
+  filtered: [],
+  activeIssueFilter: null,
+  uploadedCsvText: "",
+  sourceName: "GitHub CSV"
+};
+
+const csvUploadInput = document.getElementById("csvUpload");
+const useDemoDataButton = document.getElementById("useDemoData");
+const dataSourceLabel = document.getElementById("dataSourceLabel");
+const clearButton = document.getElementById("clearFilters");
+const exportCsvButton = document.getElementById("exportCsv");
+const resultCount = document.getElementById("resultCount");
+const qaTableBody = document.getElementById("qaTableBody");
+const displayingText = document.getElementById("displayingText");
+const flagCounters = document.getElementById("flagCounters");
+
+const exportHeaders = [
+  "Start Coordinator",
+  "Local ID",
+  "Status Date",
+  "Due Date of next ABC",
+  "Due Date of next Medication List",
+  "CSCPIP - Provisional",
+  "Initial Full CSCPIP Due",
+  "CSCPIP Update Due",
+  "Initial START Plan Due",
+  "START Plan Update Due",
+  "Plan Frequency",
+  "Most Recent Outreach Contact",
+  "Living Situation at Intake",
+  "Access to Health Care"
+];
+
+const kpiAssigned = document.getElementById("kpiAssigned");
+const kpiAssignedChip = document.getElementById("kpiAssignedChip");
+const kpiOverdue = document.getElementById("kpiOverdue");
+const kpiOverdueChip = document.getElementById("kpiOverdueChip");
+const loadError = document.getElementById("loadError");
+
+async function bootstrap() {
+  try {
+    await loadDataFromSource();
+  } catch (error) {
+    loadError.classList.remove("hidden");
+    loadError.textContent =
+      "Data could not be loaded. Use the standalone email demo file, or open this mock with a local web server so it can fetch the GitHub CSV.";
+    console.error(error);
+  }
+}
+
+async function loadCsvText() {
+  if (state.uploadedCsvText) {
+    return state.uploadedCsvText;
+  }
+
+  const embeddedCsv = document.getElementById("embeddedCsv");
+  if (embeddedCsv && embeddedCsv.textContent.trim()) {
+    return embeddedCsv.textContent;
+  }
+
+  const response = await fetch(csvPath);
+  if (!response.ok) {
+    throw new Error(`Could not load ${csvPath}.`);
+  }
+
+  return response.text();
+}
+
+async function loadDataFromSource(csvText, sourceName) {
+  const resolvedCsvText = typeof csvText === "string" ? csvText : await loadCsvText();
+  const rows = parseCsv(resolvedCsvText).map(normalizeRow);
+
+  state.rows = rows;
+  state.filtered = rows.slice();
+  state.activeIssueFilter = null;
+  state.sourceName = sourceName || (state.uploadedCsvText ? "Uploaded CSV" : "GitHub CSV");
+
+  populateCoordinatorFilter(rows);
+  populateStatusFilter(rows);
+  updateDataSourceLabel();
+  applyFilters();
+}
+
+function parseCsv(raw) {
+  const lines = raw.replace(/\r\n/g, "\n").split("\n");
+  const rows = [];
+
+  for (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+
+    const parsed = [];
+    let value = "";
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i += 1) {
+      const char = line[i];
+      const next = line[i + 1];
+
+      if (char === '"') {
+        if (inQuotes && next === '"') {
+          value += '"';
+          i += 1;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === "," && !inQuotes) {
+        parsed.push(value.trim());
+        value = "";
+      } else {
+        value += char;
+      }
+    }
+
+    parsed.push(value.trim());
+    rows.push(parsed);
+  }
+
+  const headers = rows[0] || [];
+  if (headers[0]) {
+    headers[0] = headers[0].replace(/^\uFEFF/, "");
+  }
+
+  return rows.slice(1).map((row) => {
+    const item = {};
+    headers.forEach((header, index) => {
+      item[header] = row[index] || "";
+    });
+    return item;
+  });
+}
+
+function normalizeRow(row) {
+  const normalized = { ...row };
+  dateColumns.forEach((column) => {
+    normalized[`${column} Parsed`] = parseDate(normalized[column]);
+  });
+  normalized.qaFlags = collectQaFlags(normalized);
+  return normalized;
+}
+
+function parseDate(value) {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+
+  const [year, month, day] = value.split("-").map(Number);
+  const parsed = new Date(year, month - 1, day);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function collectQaFlags(row) {
+  const flags = [];
+  const today = atMidnight(new Date());
+
+  const qaFields = [
+    { label: "ABC", key: "Due Date of next ABC Parsed" },
+    { label: "CSCPIP Update", key: "CSCPIP Update Due Parsed" },
+    { label: "Plan Update", key: "START Plan Update Due Parsed" }
+  ];
+
+  qaFields.forEach((field) => {
+    const dateValue = row[field.key];
+    if (!dateValue) {
+      return;
+    }
+
+    const days = daysUntil(today, dateValue);
+    if (days < 0) {
+      flags.push({ text: `${field.label} Overdue`, type: "overdue" });
+    }
+  });
+
+  const initialFullDue = row["Initial Full CSCPIP Due Parsed"];
+  const hasCscpipEntry = Boolean(row["CSCPIP Update Due"]);
+  if (initialFullDue && !hasCscpipEntry && daysUntil(today, initialFullDue) < 0)
+ {
+    flags.push({ text: "Initial Full CSCPIP Overdue", type: "overdue" });
+  }
+
+  const initialStartPlanDue = row["Initial START Plan Due Parsed"];
+  const hasStartPlanEntry = Boolean(row["START Plan Update Due"]);
+  if (initialStartPlanDue && !hasStartPlanEntry && daysUntil(today, initialStart
+PlanDue) < 0) {
+    flags.push({ text: "Initial START Plan Overdue", type: "overdue" });
+  }
+
+  return flags;
+}
+
+function atMidnight(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function daysUntil(from, to) {
+  const msPerDay = 1000 * 60 * 60 * 24;
+  return Math.floor((atMidnight(to) - atMidnight(from)) / msPerDay);
+}
+
+function dueBucket(parsedDate) {
+  if (!parsedDate) {
+    return "missing";
+  }
+
+  const today = atMidnight(new Date());
+  const days = daysUntil(today, parsedDate);
+
+  if (days < 0) {
+    return "overdue";
+  }
+
+  if (days <= 14) {
+    return "two-weeks";
+  }
+
+  if (days <= 30) {
+    return "month-window";
+  }
+
+  return "future";
+}
+
+function bucketToClass(bucket) {
+  if (bucket === "overdue" || bucket === "missing") {
+    return "date-overdue";
+  }
+
+  if (bucket === "two-weeks") {
+    return "date-two-weeks";
+  }
+
+  if (bucket === "month-window") {
+    return "date-month-window";
+  }
+
+  return "date-neutral";
+}
+
+function uniqueSorted(values) {
+  return Array.from(new Set(values.filter(Boolean))).sort(compareText);
+}
+
+function compareText(left, right) {
+  return String(left ?? "").localeCompare(String(right ?? ""), undefined, {
+    numeric: true,
+    sensitivity: "base"
+  });
+}
+
+function sortRows(rows) {
+  return rows.slice().sort((left, right) => {
+    const byCoordinator = compareText(left["Start Coordinator"], right["Start Coordinator"]);
+    if (byCoordinator !== 0) {
+      return byCoordinator;
+    }
+
+    const byLocalId = compareText(left["Local ID"], right["Local ID"]);
+    if (byLocalId !== 0) {
+      return byLocalId;
+    }
+
+    return compareText(left["Status Date"], right["Status Date"]);
+  });
+}
+
+function populateCoordinatorFilter(rows) {
+  const coordinators = uniqueSorted(rows.map((row) => row["Start Coordinator"]))
+;
+  coordinatorSelect.innerHTML = '<option value="All">All Coordinators</option>';
+  coordinators.forEach((name) => {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    coordinatorSelect.appendChild(option);
+  });
+}
+
+function populateStatusFilter(rows) {
+  const statuses = uniqueSorted(rows.map((row) => row.Status));
+  statusSelect.innerHTML = '<option value="All">All</option>';
+  statuses.forEach((status) => {
+    const option = document.createElement("option");
+    option.value = status;
+    option.textContent = status;
+    statusSelect.appendChild(option);
+  });
+}
+
+function applyFilters() {
+  const selectedCoordinator = coordinatorSelect.value;
+  const selectedStatus = statusSelect.value;
+  const selectedIssueFilter = state.activeIssueFilter;
+
+  const baseRows = state.rows.filter((row) => {
+    const matchCoordinator =
+      selectedCoordinator === "All" || row["Start Coordinator"] === selectedCoor
+dinator;
+    const matchStatus = selectedStatus === "All" || row.Status === selectedStatu
+s;
+    return matchCoordinator && matchStatus;
+  });
+
+  state.filtered = selectedIssueFilter
+    ? baseRows.filter((row) => rowMatchesIssueFilter(row, selectedIssueFilter))
+    : baseRows;
+
+  renderKpis(baseRows);
+  renderTable(state.filtered, baseRows.length);
+}
+
+function renderKpis(rows) {
+  const columnsForKpi = [
+    "Due Date of next ABC",
+    "Due Date of next Medication List",
+    "CSCPIP - Provisional",
+    "Initial Full CSCPIP Due",
+    "CSCPIP Update Due",
+    "Initial START Plan Due",
+    "START Plan Update Due"
+  ];
+
+  let overdueOrMissing = 0;
+
+  const flaggedByCategory = {
+    "ABC": 0,
+    "Medication List": 0,
+    "CSCPIP Provisional": 0,
+    "Initial Full CSCPIP": 0,
+    "CSCPIP Update": 0,
+    "Initial START Plan": 0,
+    "START Plan Update": 0,
+    "Outreach": 0,
+    "Access to Health Care": 0
+  };
+
+  rows.forEach((row) => {
+    columnsForKpi.forEach((column) => {
+      const bucket = getColumnBucket(row, column);
+      if (bucket === "overdue" || bucket === "missing") {
+        overdueOrMissing += 1;
+      }
+    });
+
+    if (isFlaggedBucket(getColumnBucket(row, "Due Date of next ABC"))) {
+      flaggedByCategory["ABC"] += 1;
+    }
+
+    if (isFlaggedBucket(getColumnBucket(row, "Due Date of next Medication List")
+)) {
+      flaggedByCategory["Medication List"] += 1;
+    }
+
+    if (isFlaggedBucket(getColumnBucket(row, "CSCPIP - Provisional"))) {
+      flaggedByCategory["CSCPIP Provisional"] += 1;
+    }
+
+    if (isFlaggedBucket(getColumnBucket(row, "Initial Full CSCPIP Due"))) {
+      flaggedByCategory["Initial Full CSCPIP"] += 1;
+    }
+
+    if (isFlaggedBucket(getColumnBucket(row, "CSCPIP Update Due"))) {
+      flaggedByCategory["CSCPIP Update"] += 1;
+    }
+
+    if (isFlaggedBucket(getColumnBucket(row, "Initial START Plan Due"))) {
+      flaggedByCategory["Initial START Plan"] += 1;
+    }
+
+    if (isFlaggedBucket(getColumnBucket(row, "START Plan Update Due"))) {
+      flaggedByCategory["START Plan Update"] += 1;
+    }
+
+    if (isFlaggedBucket(getOutreachBucket(row))) {
+      flaggedByCategory["Outreach"] += 1;
+    }
+
+    const accessStatus = computeAccessStatus(row);
+    if (accessStatus.className === "access-needed") {
+      flaggedByCategory["Access to Health Care"] += 1;
+    }
+  });
+
+  kpiAssigned.textContent = String(rows.length);
+  if (kpiAssignedChip) {
+    kpiAssignedChip.className = "summary-chip summary-chip-good";
+  }
+
+  kpiOverdue.textContent = String(overdueOrMissing);
+  if (kpiOverdueChip) {
+    kpiOverdueChip.className =
+      overdueOrMissing > 0 ? "summary-chip summary-chip-flagged" : "summary-chip
+ summary-chip-good";
+  }
+  renderFlagCounters(flaggedByCategory);
+}
+
+function renderFlagCounters(categoryCounts) {
+  if (!flagCounters) {
+    return;
+  }
+
+  const shortLabels = {
+    "ABC": "ABC",
+    "Medication List": "Med List",
+    "CSCPIP Provisional": "CSCPIP Prov",
+    "Initial Full CSCPIP": "CSCPIP Full",
+    "CSCPIP Update": "CSCPIP Upd",
+    "Initial START Plan": "Init START Plan",
+    "START Plan Update": "START Plan Upd",
+    "Outreach": "Outreach",
+    "Access to Health Care": "Access"
+  };
+
+  const labels = Object.keys(categoryCounts);
+  flagCounters.innerHTML = labels
+    .map((label) => {
+      const count = categoryCounts[label];
+      const extraClass = count > 0 ? " summary-chip-flagged" : " summary-chip-go
+od";
+      const displayLabel = shortLabels[label] || label;
+      const activeClass = state.activeIssueFilter === label ? " summary-chip-act
+ive" : "";
+      return `<div class="summary-chip summary-chip-clickable${extraClass}${acti
+veClass}" data-filter-key="${escapeHtml(label)}" role="button" tabindex="0" titl
+e="Filter table by ${escapeHtml(displayLabel)}">${escapeHtml(displayLabel)}: <st
+rong>${count}</strong></div>`;
+    })
+    .join("");
+}
+
+function isFlaggedBucket(bucket) {
+  return bucket === "overdue" || bucket === "missing";
+}
+
+function rowMatchesIssueFilter(row, filterKey) {
+  if (filterKey === "ABC") {
+    return isFlaggedBucket(getColumnBucket(row, "Due Date of next ABC"));
+  }
+
+  if (filterKey === "Medication List") {
+    return isFlaggedBucket(getColumnBucket(row, "Due Date of next Medication Lis
+t"));
+  }
+
+  if (filterKey === "CSCPIP Provisional") {
+    return isFlaggedBucket(getColumnBucket(row, "CSCPIP - Provisional"));
+  }
+
+  if (filterKey === "Initial Full CSCPIP") {
+    return isFlaggedBucket(getColumnBucket(row, "Initial Full CSCPIP Due"));
+  }
+
+  if (filterKey === "CSCPIP Update") {
+    return isFlaggedBucket(getColumnBucket(row, "CSCPIP Update Due"));
+  }
+
+  if (filterKey === "Initial START Plan") {
+    return isFlaggedBucket(getColumnBucket(row, "Initial START Plan Due"));
+  }
+
+  if (filterKey === "START Plan Update") {
+    return isFlaggedBucket(getColumnBucket(row, "START Plan Update Due"));
+  }
+
+  if (filterKey === "Outreach") {
+    return isFlaggedBucket(getOutreachBucket(row));
+  }
+
+  if (filterKey === "Access to Health Care") {
+    return computeAccessStatus(row).className === "access-needed";
+  }
+
+  return true;
+}
+
+function renderTable(rows, baseCount = rows.length) {
+  resultCount.textContent = `${rows.length} result${rows.length === 1 ? "" : "s"
+}`;
+  displayingText.textContent = `${baseCount ? 1 : 0}-${baseCount} of ${baseCount
+}`;
+  qaTableBody.innerHTML = "";
+
+  if (!rows.length) {
+    const emptyRow = document.createElement("tr");
+    emptyRow.innerHTML = '<td colspan="14">No cases match the current filter.</t
+d>';
+    qaTableBody.appendChild(emptyRow);
+    return;
+  }
+
+  sortRows(rows)
+    .forEach((row) => {
+      const accessStatus = computeAccessStatus(row);
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td class="coordinator-cell">${escapeHtml(row["Start Coordinator"])}</td
+>
+        <td><a href="#" class="mock-profile-link" aria-label="Open profile for L
+ocal ID ${escapeHtml(row["Local ID"])}" onclick="return false;">${escapeHtml(row
+["Local ID"])}</a></td>
+        <td>${escapeHtml(row["Status Date"])}</td>
+        ${renderDueDateCell(row, "Due Date of next ABC")}
+        ${renderDueDateCell(row, "Due Date of next Medication List")}
+        ${renderDueDateCell(row, "CSCPIP - Provisional")}
+        ${renderDueDateCell(row, "Initial Full CSCPIP Due")}
+        ${renderDueDateCell(row, "CSCPIP Update Due")}
+        ${renderDueDateCell(row, "Initial START Plan Due")}
+        ${renderDueDateCell(row, "START Plan Update Due")}
+        <td>${escapeHtml(row["Plan Frequency"])}</td>
+        ${renderContactCell(row)}
+        <td>${escapeHtml(row["Living Situation at Intake"])}</td>
+        <td class="${accessStatus.className}">${escapeHtml(accessStatus.label)}<
+/td>
+      `;
+      qaTableBody.appendChild(tr);
+    });
+}
+
+function renderDueDateCell(row, column) {
+  const raw = row[column];
+  const bucket = getColumnBucket(row, column);
+  const css = bucketToClass(bucket);
+  const text = raw || (bucket === "missing" ? "Missing" : "");
+  return `<td class="${css}">${escapeHtml(text)}</td>`;
+}
+
+function renderContactCell(row) {
+  const value = row["Most Recent Outreach Contact"];
+  const bucket = getOutreachBucket(row);
+  const cssClass = bucketToClass(bucket);
+  return `<td class="${cssClass}">${escapeHtml(value || "")}</td>`;
+}
+
+function getOutreachBucket(row) {
+  const value = row["Most Recent Outreach Contact"];
+  const parsed = parseDate(value);
+  const cadenceDays = getOutreachCadenceDays(row["Plan Frequency"]);
+
+  if (!parsed || !cadenceDays) {
+    return "neutral";
+  }
+
+  const today = atMidnight(new Date());
+  const daysSince = daysUntil(parsed, today);
+  return daysSince > cadenceDays ? "overdue" : "neutral";
+}
+
+function getOutreachCadenceDays(planFrequency) {
+  const normalized = String(planFrequency || "").toLowerCase();
+
+  if (normalized.includes("weekly")) {
+    return 7;
+  }
+
+  if (normalized.includes("bi-monthly") || normalized.includes("twice a month"))
+ {
+    return 14;
+  }
+
+  if (normalized.includes("monthly")) {
+    return 30;
+  }
+
+  return null;
+}
+
+function dueClass(parsedDate) {
+  return bucketToClass(dueBucket(parsedDate));
+}
+
+function getColumnBucket(row, column) {
+  const raw = row[column];
+
+  if (column === "CSCPIP - Provisional") {
+    return raw ? "neutral" : "missing";
+  }
+
+  if (column === "Initial Full CSCPIP Due") {
+    const dueDate = parseDate(raw);
+    const hasCscpipEntry = Boolean(row["CSCPIP Update Due"]);
+    if (!dueDate || hasCscpipEntry) {
+      return "neutral";
+    }
+    return dueBucket(dueDate);
+  }
+
+  if (column === "Initial START Plan Due") {
+    const dueDate = parseDate(raw);
+    const hasStartPlanEntry = Boolean(row["START Plan Update Due"]);
+    if (!dueDate || hasStartPlanEntry) {
+      return "neutral";
+    }
+    return dueBucket(dueDate);
+  }
+
+  return dueBucket(parseDate(raw));
+}
+
+function computeAccessStatus(row) {
+  const hasCriticalFlag = row.qaFlags.some((flag) => flag.type === "overdue");
+  if (hasCriticalFlag) {
+    return { label: "Access to Health Care Needed", className: "access-needed" }
+;
+  }
+
+  return { label: "yes", className: "" };
+}
+
+function escapeHtml(value) {
+  const string = String(value ?? "");
+  return string
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function escapeCsv(value) {
+  const string = String(value ?? "");
+  return `"${string.replaceAll('"', '""')}"`;
+}
+
+function exportCurrentFilteredRows() {
+  const sortedRows = sortRows(state.filtered);
+
+  const lines = [exportHeaders.map(escapeCsv).join(",")];
+
+  sortedRows.forEach((row) => {
+    const accessValue = computeAccessStatus(row).label;
+    const values = [
+      row["Start Coordinator"],
+      row["Local ID"],
+      row["Status Date"],
+      row["Due Date of next ABC"],
+      row["Due Date of next Medication List"],
+      row["CSCPIP - Provisional"],
+      row["Initial Full CSCPIP Due"],
+      row["CSCPIP Update Due"],
+      row["Initial START Plan Due"],
+      row["START Plan Update Due"],
+      row["Plan Frequency"],
+      row["Most Recent Outreach Contact"],
+      row["Living Situation at Intake"],
+      accessValue
+    ];
+    lines.push(values.map(escapeCsv).join(","));
+  });
+
+  const csvData = `${lines.join("\n")}\n`;
+  const blob = new Blob([csvData], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+
+  const timestamp = new Date()
+    .toISOString()
+    .replaceAll("-", "")
+    .replaceAll(":", "")
+    .replace("T", "_")
+    .slice(0, 13);
+
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `qa_snapshot_filtered_${timestamp}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+
+  URL.revokeObjectURL(url);
+}
+
+function updateDataSourceLabel() {
+  if (!dataSourceLabel) {
+    return;
+  }
+
+  dataSourceLabel.textContent = `Using ${state.sourceName}`;
+}
+
+csvUploadInput.addEventListener("change", async (event) => {
+  const file = event.target.files && event.target.files[0];
+  if (!file) {
+    return;
+  }
+
+  try {
+    const csvText = await file.text();
+    state.uploadedCsvText = csvText;
+    await loadDataFromSource(csvText, file.name);
+  } catch (error) {
+    loadError.classList.remove("hidden");
+    loadError.textContent = `Could not read ${file.name}. Please upload a valid CSV file.`;
+    console.error(error);
+  }
+});
+
+useDemoDataButton.addEventListener("click", async () => {
+  state.uploadedCsvText = "";
+  if (csvUploadInput) {
+    csvUploadInput.value = "";
+  }
+
+  await loadDataFromSource(undefined, "Bundled demo CSV");
+});
+
+coordinatorSelect.addEventListener("change", applyFilters);
+statusSelect.addEventListener("change", applyFilters);
+clearButton.addEventListener("click", () => {
+  coordinatorSelect.value = "All";
+  statusSelect.value = "All";
+  state.activeIssueFilter = null;
+  applyFilters();
+});
+
+exportCsvButton.addEventListener("click", exportCurrentFilteredRows);
+
+flagCounters.addEventListener("click", (event) => {
+  const target = event.target.closest("[data-filter-key]");
+  if (!target) {
+    return;
+  }
+
+  const selected = target.getAttribute("data-filter-key");
+  state.activeIssueFilter = state.activeIssueFilter === selected ? null : select
+ed;
+  applyFilters();
+});
+
+flagCounters.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") {
+    return;
+  }
+
+  const target = event.target.closest("[data-filter-key]");
+  if (!target) {
+    return;
+  }
+
+  event.preventDefault();
+  const selected = target.getAttribute("data-filter-key");
+  state.activeIssueFilter = state.activeIssueFilter === selected ? null : select
+ed;
+  applyFilters();
+});
+
+bootstrap();
+
+</script>
+</body>
+</html>
+
+@NicholasHWagner ➜ /workspaces/SIRS-QA-Dashboard (main) $ 
+
+Output exceeded terminal scrollback; beginning of output was lost
